@@ -1,5 +1,4 @@
-<?php
-$pageTitle = 'Управление платежами';
+<?php$pageTitle = 'Управление платежами';
 require_once 'header.php';
 
 // Фильтры
@@ -94,149 +93,7 @@ $stmt = db()->query($statsQuery);
 $stats = $stmt->fetch();
 ?>
 
-<style>
-    .payments-stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 20px;
-        margin-bottom: 24px;
-    }
 
-    .payment-stat-card {
-        background: var(--bg-primary);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-lg);
-        padding: 20px;
-        text-align: center;
-        box-shadow: var(--shadow-sm);
-        position: relative;
-        overflow: hidden;
-    }
-
-    .payment-stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-    }
-
-    .payment-stat-card.revenue::before {
-        background: linear-gradient(135deg, var(--success), #059669);
-    }
-
-    .payment-stat-card.pending::before {
-        background: linear-gradient(135deg, var(--warning), #d97706);
-    }
-
-    .payment-stat-card.completed::before {
-        background: linear-gradient(135deg, var(--primary), var(--primary-light));
-    }
-
-    .payment-stat-card.failed::before {
-        background: linear-gradient(135deg, var(--error), #dc2626);
-    }
-
-    .payment-stat-value {
-        font-size: 28px;
-        font-weight: 800;
-        margin-bottom: 8px;
-    }
-
-    .payment-stat-value.revenue {
-        color: var(--success);
-    }
-
-    .payment-stat-value.pending {
-        color: var(--warning);
-    }
-
-    .payment-stat-value.completed {
-        color: var(--primary);
-    }
-
-    .payment-stat-value.failed {
-        color: var(--error);
-    }
-
-    .payment-stat-label {
-        font-size: 14px;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-
-    .payment-status {
-        display: inline-flex;
-        align-items: center;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    .payment-status.completed {
-        background: #dcfce7;
-        color: #166534;
-    }
-
-    .payment-status.pending {
-        background: #fef3c7;
-        color: #92400e;
-    }
-
-    .payment-status.failed {
-        background: #fee2e2;
-        color: #991b1b;
-    }
-
-    .payment-status.refunded {
-        background: #f3f4f6;
-        color: #374151;
-    }
-
-    .payment-actions {
-        display: flex;
-        gap: 8px;
-    }
-
-    .btn-small {
-        padding: 6px 12px;
-        font-size: 12px;
-        border-radius: 6px;
-    }
-
-    .btn-success {
-        background: var(--success);
-        color: white;
-        border: none;
-    }
-
-    .btn-success:hover {
-        background: #059669;
-    }
-
-    .btn-warning {
-        background: var(--warning);
-        color: white;
-        border: none;
-    }
-
-    .btn-warning:hover {
-        background: #d97706;
-    }
-
-    .transaction-id {
-        font-family: 'Monaco', 'Menlo', monospace;
-        font-size: 12px;
-        background: var(--bg-secondary);
-        padding: 4px 8px;
-        border-radius: 4px;
-        color: var(--text-secondary);
-    }
-</style>
 
 <!-- Статистика платежей -->
 <div class="payments-stats fade-in">
@@ -396,23 +253,11 @@ $stats = $stmt->fetch();
     </div>
 </div>
 
-<script>
-    // Анимации
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('visible');
-            }
-        });
-    }, { threshold: 0.1 });
 
-    document.querySelectorAll('.fade-in').forEach(el => {
-        observer.observe(el);
-    });
-</script>
 
 </div>
     </main>
 </div>
+<?php?>
 </body>
 </html>
