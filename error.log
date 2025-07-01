@@ -1,0 +1,30 @@
+[30-Jun-2025 14:30:37 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:30:37 Europe/Moscow] Login attempt for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:30:37 Europe/Moscow] verifyUserPassword: Password verified for user ID: 3
+[30-Jun-2025 14:30:37 Europe/Moscow] Password verified for user ID: 3
+[30-Jun-2025 14:30:37 Europe/Moscow] createUserSession PDO error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'token' in 'field list'
+[30-Jun-2025 14:30:37 Europe/Moscow] Failed to create session for user ID: 3
+[30-Jun-2025 14:30:41 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:30:41 Europe/Moscow] Login attempt for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:30:41 Europe/Moscow] verifyUserPassword: Password verified for user ID: 3
+[30-Jun-2025 14:30:41 Europe/Moscow] Password verified for user ID: 3
+[30-Jun-2025 14:30:41 Europe/Moscow] createUserSession PDO error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'token' in 'field list'
+[30-Jun-2025 14:30:41 Europe/Moscow] Failed to create session for user ID: 3
+[30-Jun-2025 14:30:54 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:31:19 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:31:19 Europe/Moscow] Login attempt for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:31:19 Europe/Moscow] verifyUserPassword: Invalid password for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:31:19 Europe/Moscow] Password verification failed for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:31:26 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:31:26 Europe/Moscow] Login attempt for email: aleklobasov@yandex.ru
+[30-Jun-2025 14:31:26 Europe/Moscow] verifyUserPassword: Password verified for user ID: 3
+[30-Jun-2025 14:31:26 Europe/Moscow] Password verified for user ID: 3
+[30-Jun-2025 14:31:26 Europe/Moscow] createUserSession PDO error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'token' in 'field list'
+[30-Jun-2025 14:31:26 Europe/Moscow] Failed to create session for user ID: 3
+[30-Jun-2025 14:31:38 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:31:44 Europe/Moscow] PDO connection established successfully
+[30-Jun-2025 14:31:44 Europe/Moscow] Login attempt for email: test@teleadm.ru
+[30-Jun-2025 14:31:45 Europe/Moscow] verifyUserPassword: Password verified for user ID: 8
+[30-Jun-2025 14:31:45 Europe/Moscow] Password verified for user ID: 8
+[30-Jun-2025 14:31:45 Europe/Moscow] createUserSession PDO error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'token' in 'field list'
+[30-Jun-2025 14:31:45 Europe/Moscow] Failed to create session for user ID: 8
