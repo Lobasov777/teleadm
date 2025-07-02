@@ -1,4 +1,5 @@
-<?php$pageTitle = 'Настройки системы';
+<?php
+$pageTitle = 'Настройки системы';
 require_once 'header.php';
 
 $message = '';
@@ -156,32 +157,430 @@ $systemChecks = [
     'pdo_mysql' => extension_loaded('pdo_mysql'),
     'memory_limit' => (int)str_replace('M', '', ini_get('memory_limit')) >= 128,
     'max_execution_time' => (int)ini_get('max_execution_time') >= 30
-];?>
+];
+?>
 
+<style>
+    /* Основные стили страницы */
+    .page-container {
+        padding: 32px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
 
+    .settings-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 32px;
+    }
+
+    /* Сообщения */
+    .alert {
+        padding: 16px 20px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        animation: slideIn 0.3s ease;
+    }
+
+    .alert-success {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+        border: 1px solid rgba(34, 197, 94, 0.2);
+    }
+
+    .alert-error {
+        background: rgba(239, 68, 68, 0.1);
+        color: #dc2626;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    @keyframes slideIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Секции настроек */
+    .settings-section {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        margin-bottom: 24px;
+        transition: all 0.3s ease;
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    .settings-section.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .settings-section:hover {
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    }
+
+    .section-title {
+        font-size: 20px;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        letter-spacing: -0.025em;
+    }
+
+    .section-icon {
+        font-size: 24px;
+    }
+
+    /* Формы */
+    .settings-form {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+    }
+
+    .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .form-group.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .form-label {
+        font-size: 14px;
+        font-weight: 600;
+        color: #374151;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .form-help {
+        font-size: 12px;
+        color: #64748b;
+        margin-top: 4px;
+        line-height: 1.4;
+    }
+
+    .form-input, .form-select {
+        padding: 12px 16px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 14px;
+        background: white;
+        transition: all 0.2s ease;
+        font-family: inherit;
+    }
+
+    .form-input:focus, .form-select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        transform: translateY(-1px);
+    }
+
+    /* Чекбоксы */
+    .checkbox-group {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 16px 20px;
+        background: #f8fafc;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        transition: all 0.2s ease;
+    }
+
+    .checkbox-group:hover {
+        border-color: #3b82f6;
+        background: #f1f5f9;
+    }
+
+    .checkbox {
+        width: 20px;
+        height: 20px;
+        accent-color: #3b82f6;
+        flex-shrink: 0;
+        margin-top: 2px;
+    }
+
+    .checkbox-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .checkbox-label {
+        font-size: 15px;
+        color: #0f172a;
+        cursor: pointer;
+        font-weight: 600;
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    .checkbox-description {
+        font-size: 13px;
+        color: #64748b;
+        line-height: 1.4;
+    }
+
+    /* Кнопки */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #3b82f6, #1e40af);
+        color: white;
+        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+    }
+
+    .btn-primary:hover {
+        background: linear-gradient(135deg, #1e40af, #1e3a8a);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(59, 130, 246, 0.4);
+    }
+
+    .btn-secondary {
+        background: white;
+        color: #64748b;
+        border: 1px solid #d1d5db;
+    }
+
+    .btn-secondary:hover {
+        border-color: #9ca3af;
+        color: #374151;
+        text-decoration: none;
+    }
+
+    .btn-danger {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+        color: white;
+        box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
+    }
+
+    .btn-danger:hover {
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(239, 68, 68, 0.4);
+    }
+
+    .btn-small {
+        padding: 8px 16px;
+        font-size: 12px;
+    }
+
+    .save-button {
+        align-self: flex-start;
+        margin-top: 8px;
+    }
+
+    /* Опасная зона */
+    .danger-zone {
+        border-color: #ef4444;
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.02), rgba(239, 68, 68, 0.01));
+    }
+
+    .danger-zone .section-title {
+        color: #dc2626;
+    }
+
+    .action-buttons {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    /* Правая колонка */
+    .system-overview {
+        display: grid;
+        gap: 24px;
+    }
+
+    .overview-card {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    .overview-card.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .overview-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    }
+
+    .overview-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        letter-spacing: -0.025em;
+    }
+
+    .overview-stat {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid #f1f5f9;
+    }
+
+    .overview-stat:last-child {
+        border-bottom: none;
+    }
+
+    .stat-label {
+        font-size: 14px;
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    .stat-value {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 15px;
+    }
+
+    .stat-value.success {
+        color: #10b981;
+    }
+
+    .stat-value.warning {
+        color: #f59e0b;
+    }
+
+    .stat-value.error {
+        color: #ef4444;
+    }
+
+    /* Проверки системы */
+    .system-check {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid #f1f5f9;
+    }
+
+    .system-check:last-child {
+        border-bottom: none;
+    }
+
+    .check-status {
+        font-weight: 700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .check-status.ok {
+        color: #10b981;
+    }
+
+    .check-status.fail {
+        color: #ef4444;
+    }
+
+    /* Анимации */
+    .settings-section:nth-child(1) { transition-delay: 0.1s; }
+    .settings-section:nth-child(2) { transition-delay: 0.2s; }
+    .settings-section:nth-child(3) { transition-delay: 0.3s; }
+    .settings-section:nth-child(4) { transition-delay: 0.4s; }
+
+    .overview-card:nth-child(1) { transition-delay: 0.1s; }
+    .overview-card:nth-child(2) { transition-delay: 0.2s; }
+    .overview-card:nth-child(3) { transition-delay: 0.3s; }
+    .overview-card:nth-child(4) { transition-delay: 0.4s; }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+        .settings-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .page-container {
+            padding: 20px;
+        }
+        
+        .form-row {
+            grid-template-columns: 1fr;
+        }
+        
+        .checkbox-group {
+            flex-direction: column;
+            gap: 12px;
+        }
+    }
+</style>
 
 <div class="page-container">
     <!-- Сообщения -->
-    <?php if ($message):?>
+    <?php if ($message): ?>
         <div class="alert alert-success">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                 <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
             </svg>
-            <?php echo htmlspecialchars($message);?>
+            <?php echo htmlspecialchars($message); ?>
         </div>
-    <?php endif;?>
+    <?php endif; ?>
 
-    <?php if ($error):?>
+    <?php if ($error): ?>
         <div class="alert alert-error">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
                 <line x1="15" y1="9" x2="9" y2="15" stroke="currentColor" stroke-width="2"/>
                 <line x1="9" y1="9" x2="15" y2="15" stroke="currentColor" stroke-width="2"/>
             </svg>
-            <?php echo htmlspecialchars($error);?>
+            <?php echo htmlspecialchars($error); ?>
         </div>
-    <?php endif;?>
+    <?php endif; ?>
 
     <div class="settings-grid">
         <!-- Основные настройки -->
@@ -213,7 +612,7 @@ $systemChecks = [
                                 Email администратора
                             </label>
                             <input type="email" name="admin_email" class="form-input" 
-                                   value="<?php echo htmlspecialchars(getSetting('admin_email'));?>" 
+                                   value="<?php echo htmlspecialchars(getSetting('admin_email')); ?>" 
                                    placeholder="admin@example.com">
                             <div class="form-help">Для получения уведомлений о работе системы</div>
                         </div>
@@ -226,7 +625,7 @@ $systemChecks = [
                                 Email поддержки
                             </label>
                             <input type="email" name="support_email" class="form-input" 
-                                   value="<?php echo htmlspecialchars(getSetting('support_email'));?>" 
+                                   value="<?php echo htmlspecialchars(getSetting('support_email')); ?>" 
                                    placeholder="support@example.com">
                             <div class="form-help">Отображается пользователям для обратной связи</div>
                         </div>
@@ -234,7 +633,7 @@ $systemChecks = [
                     
                     <div class="checkbox-group">
                         <input type="checkbox" name="registration_enabled" class="checkbox" id="registration_enabled"
-                               <?php echo getSetting('registration_enabled', 'true') === 'true' ? 'checked' : '';?>>
+                               <?php echo getSetting('registration_enabled', 'true') === 'true' ? 'checked' : ''; ?>>
                         <div class="checkbox-content">
                             <label for="registration_enabled" class="checkbox-label">Разрешить регистрацию новых пользователей</label>
                             <div class="checkbox-description">Если отключено, новые пользователи не смогут создавать аккаунты</div>
@@ -243,7 +642,7 @@ $systemChecks = [
                     
                     <div class="checkbox-group">
                         <input type="checkbox" name="maintenance_mode" class="checkbox" id="maintenance_mode"
-                               <?php echo getSetting('maintenance_mode', 'false') === 'true' ? 'checked' : '';?>>
+                               <?php echo getSetting('maintenance_mode', 'false') === 'true' ? 'checked' : ''; ?>>
                         <div class="checkbox-content">
                             <label for="maintenance_mode" class="checkbox-label">Режим обслуживания</label>
                             <div class="checkbox-description">Сайт будет недоступен для обычных пользователей (администраторы смогут войти)</div>
@@ -270,7 +669,7 @@ $systemChecks = [
                                 Цена Premium (₽)
                             </label>
                             <input type="number" name="premium_price" class="form-input" min="1" max="99999"
-                                   value="<?php echo getSetting('premium_price', 299);?>" required>
+                                   value="<?php echo getSetting('premium_price', 299); ?>" required>
                             <div class="form-help">Стоимость Premium подписки</div>
                         </div>
                         
@@ -285,7 +684,7 @@ $systemChecks = [
                                 Длительность Premium (дней)
                             </label>
                             <input type="number" name="premium_duration_days" class="form-input" min="1" max="365"
-                                   value="<?php echo getSetting('premium_duration_days', 30);?>" required>
+                                   value="<?php echo getSetting('premium_duration_days', 30); ?>" required>
                             <div class="form-help">На сколько дней активируется Premium подписка</div>
                         </div>
                     </div>
@@ -301,7 +700,7 @@ $systemChecks = [
                                 Лимит кампаний (Базовый)
                             </label>
                             <input type="number" name="free_campaigns_limit" class="form-input" min="1" max="100"
-                                   value="<?php echo getSetting('free_campaigns_limit', 1);?>" required>
+                                   value="<?php echo getSetting('free_campaigns_limit', 1); ?>" required>
                             <div class="form-help">Максимальное количество кампаний для бесплатных пользователей</div>
                         </div>
                         
@@ -315,7 +714,7 @@ $systemChecks = [
                                 Лимит размещений/месяц (Базовый)
                             </label>
                             <input type="number" name="free_placements_limit" class="form-input" min="1" max="1000"
-                                   value="<?php echo getSetting('free_placements_limit', 50);?>" required>
+                                   value="<?php echo getSetting('free_placements_limit', 50); ?>" required>
                             <div class="form-help">Максимальное количество размещений в месяц для бесплатных пользователей</div>
                         </div>
                     </div>
@@ -339,7 +738,7 @@ $systemChecks = [
                             Автоочистка данных (дней)
                         </label>
                         <input type="number" name="auto_cleanup_days" class="form-input" min="7" max="365"
-                               value="<?php echo getSetting('auto_cleanup_days', 30);?>" required>
+                               value="<?php echo getSetting('auto_cleanup_days', 30); ?>" required>
                         <div class="form-help">Через сколько дней удалять старые логи и неактивные сессии</div>
                     </div>
                 </div>
@@ -413,27 +812,27 @@ $systemChecks = [
                 </h3>
                 <div class="overview-stat">
                     <span class="stat-label">Всего пользователей</span>
-                    <span class="stat-value"><?php echo number_format($systemStats['total_users']);?></span>
+                    <span class="stat-value"><?php echo number_format($systemStats['total_users']); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Premium пользователей</span>
-                    <span class="stat-value success"><?php echo number_format($systemStats['premium_users']);?></span>
+                    <span class="stat-value success"><?php echo number_format($systemStats['premium_users']); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Всего кампаний</span>
-                    <span class="stat-value"><?php echo number_format($systemStats['total_campaigns']);?></span>
+                    <span class="stat-value"><?php echo number_format($systemStats['total_campaigns']); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Всего размещений</span>
-                    <span class="stat-value"><?php echo number_format($systemStats['total_placements']);?></span>
+                    <span class="stat-value"><?php echo number_format($systemStats['total_placements']); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Общая выручка</span>
-                    <span class="stat-value success">₽<?php echo number_format($systemStats['total_revenue'], 0, ',', ' ');?></span>
+                    <span class="stat-value success">₽<?php echo number_format($systemStats['total_revenue'], 0, ',', ' '); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Активных сессий</span>
-                    <span class="stat-value"><?php echo number_format($systemStats['active_sessions']);?></span>
+                    <span class="stat-value"><?php echo number_format($systemStats['active_sessions']); ?></span>
                 </div>
             </div>
 
@@ -447,22 +846,22 @@ $systemChecks = [
                 </h3>
                 <div class="overview-stat">
                     <span class="stat-label">Активных подписок</span>
-                    <span class="stat-value success"><?php echo number_format($subscriptionStats['active_subscriptions']);?></span>
+                    <span class="stat-value success"><?php echo number_format($subscriptionStats['active_subscriptions']); ?></span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Истекают в течение недели</span>
-                    <span class="stat-value <?php echo $subscriptionStats['expiring_soon'] > 0 ? 'warning' : '';?>">
-                        <?php echo number_format($subscriptionStats['expiring_soon']);?>
+                    <span class="stat-value <?php echo $subscriptionStats['expiring_soon'] > 0 ? 'warning' : ''; ?>">
+                        <?php echo number_format($subscriptionStats['expiring_soon']); ?>
                     </span>
                 </div>
                 <div class="overview-stat">
                     <span class="stat-label">Ближайшее истечение</span>
                     <span class="stat-value">
-                        <?php if ($subscriptionStats['next_expiry']):?>
-                            <?php echo date('d.m.Y', strtotime($subscriptionStats['next_expiry']));?>
-                        <?php else:?>
+                        <?php if ($subscriptionStats['next_expiry']): ?>
+                            <?php echo date('d.m.Y', strtotime($subscriptionStats['next_expiry'])); ?>
+                        <?php else: ?>
                             —
-                        <?php endif;?>
+                        <?php endif; ?>
                     </span>
                 </div>
             </div>
@@ -478,26 +877,26 @@ $systemChecks = [
                 </h3>
                 <div class="system-check">
                     <span class="stat-label">PHP версия ≥ 7.4</span>
-                    <span class="check-status <?php echo $systemChecks['php_version'] ? 'ok' : 'fail';?>">
-                        <?php echo $systemChecks['php_version'] ? '✅ OK' : '❌ FAIL';?>
+                    <span class="check-status <?php echo $systemChecks['php_version'] ? 'ok' : 'fail'; ?>">
+                        <?php echo $systemChecks['php_version'] ? '✅ OK' : '❌ FAIL'; ?>
                     </span>
                 </div>
                 <div class="system-check">
                     <span class="stat-label">PDO MySQL</span>
-                    <span class="check-status <?php echo $systemChecks['pdo_mysql'] ? 'ok' : 'fail';?>">
-                        <?php echo $systemChecks['pdo_mysql'] ? '✅ OK' : '❌ FAIL';?>
+                    <span class="check-status <?php echo $systemChecks['pdo_mysql'] ? 'ok' : 'fail'; ?>">
+                        <?php echo $systemChecks['pdo_mysql'] ? '✅ OK' : '❌ FAIL'; ?>
                     </span>
                 </div>
                 <div class="system-check">
                     <span class="stat-label">Memory limit ≥ 128MB</span>
-                    <span class="check-status <?php echo $systemChecks['memory_limit'] ? 'ok' : 'fail';?>">
-                        <?php echo $systemChecks['memory_limit'] ? '✅ OK' : '❌ FAIL';?>
+                    <span class="check-status <?php echo $systemChecks['memory_limit'] ? 'ok' : 'fail'; ?>">
+                        <?php echo $systemChecks['memory_limit'] ? '✅ OK' : '❌ FAIL'; ?>
                     </span>
                 </div>
                 <div class="system-check">
                     <span class="stat-label">Max execution time ≥ 30s</span>
-                    <span class="check-status <?php echo $systemChecks['max_execution_time'] ? 'ok' : 'fail';?>">
-                        <?php echo $systemChecks['max_execution_time'] ? '✅ OK' : '❌ FAIL';?>
+                    <span class="check-status <?php echo $systemChecks['max_execution_time'] ? 'ok' : 'fail'; ?>">
+                        <?php echo $systemChecks['max_execution_time'] ? '✅ OK' : '❌ FAIL'; ?>
                     </span>
                 </div>
             </div>
@@ -546,6 +945,58 @@ $systemChecks = [
     </div>
 </div>
 
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Анимация элементов при загрузке
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('animate-in');
+                }
+            });
+        }, { threshold: 0.1 });
 
+        // Наблюдаем за элементами
+        document.querySelectorAll('.settings-section, .overview-card').forEach(el => {
+            observer.observe(el);
+        });
 
-<?php require_once 'footer.php';?>
+        // Подтверждение для чекбоксов критических настроек
+        const criticalCheckboxes = ['maintenance_mode'];
+        criticalCheckboxes.forEach(checkboxId => {
+            const checkbox = document.getElementById(checkboxId);
+            if (checkbox) {
+                checkbox.addEventListener('change', function() {
+                    if (this.checked && checkboxId === 'maintenance_mode') {
+                        if (!confirm('Включить режим обслуживания? Сайт станет недоступен для пользователей.')) {
+                            this.checked = false;
+                        }
+                    }
+                });
+            }
+        });
+
+        // Валидация формы
+        const form = document.querySelector('.settings-form');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                const premiumPrice = document.querySelector('input[name="premium_price"]').value;
+                const premiumDuration = document.querySelector('input[name="premium_duration_days"]').value;
+                
+                if (premiumPrice < 1 || premiumPrice > 99999) {
+                    e.preventDefault();
+                    alert('Цена Premium должна быть от 1 до 99999 рублей');
+                    return;
+                }
+                
+                if (premiumDuration < 1 || premiumDuration > 365) {
+                    e.preventDefault();
+                    alert('Длительность Premium должна быть от 1 до 365 дней');
+                    return;
+                }
+            });
+        }
+    });
+</script>
+
+<?php require_once 'footer.php'; ?>

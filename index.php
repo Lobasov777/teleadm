@@ -1,1204 +1,1201 @@
 <?php
-require_once 'includes/auth.php';
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+$pageTitle = 'Админ-панель';
+
+if (!file_exists('header.php')) {
+    die('Ошибка: Файл header.php не найден в папке admin/');
+}
+
+require_once 'header.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// Проверка прав админа
+if (function_exists('isAdmin') && !isAdmin()) {
+    die('Доступ запрещен. Необходимы права администратора.');
+}
+
+if (!function_exists('isAdmin')) {
+    $stmt = db()->prepare("SELECT role FROM users WHERE id = ?");
+    $stmt->execute([$_SESSION['user_id']]);
+    $user = $stmt->fetch();
+    
+    if (!$user || $user['role'] !== 'admin') {
+        die('Доступ запрещен. Необходимы права администратора.');
+    }
+}
+
+try {
+    // Статистика пользователей
+    $stmt = db()->query("
+        SELECT 
+            COUNT(*) as total_users,
+            SUM(CASE WHEN role = 'premium' THEN 1 ELSE 0 END) as premium_users,
+            SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) as free_users,
+            SUM(CASE WHEN is_blocked = TRUE THEN 1 ELSE 0 END) as blocked_users,
+            SUM(CASE WHEN DATE(created_at) = CURDATE() THEN 1 ELSE 0 END) as registered_today,
+            SUM(CASE WHEN DATE(last_login) = CURDATE() THEN 1 ELSE 0 END) as active_today
+        FROM users 
+        WHERE role != 'admin'
+    ");
+    $userStats = $stmt->fetch();
+
+    // Статистика размещений и доходов
+    $stmt = db()->query("
+        SELECT 
+            COUNT(id) as total_placements,
+            COALESCE(SUM(price), 0) as total_revenue,
+            COUNT(DISTINCT campaign_id) as total_campaigns,
+            SUM(CASE WHEN DATE(created_at) = CURDATE() THEN 1 ELSE 0 END) as placements_today
+        FROM ad_placements
+    ");
+    $placementStats = $stmt->fetch();
+
+    // Статистика платежей
+    $stmt = db()->query("
+        SELECT 
+            COUNT(*) as payments_count,
+            COALESCE(SUM(amount), 0) as payments_amount
+        FROM payments 
+        WHERE status = 'completed' 
+        AND MONTH(paid_at) = MONTH(CURRENT_DATE()) 
+        AND YEAR(paid_at) = YEAR(CURRENT_DATE())
+    ");
+    $paymentStats = $stmt->fetch();
+
+    // Последние пользователи
+    $stmt = db()->query("
+        SELECT id, username, email, role, created_at 
+        FROM users 
+        WHERE role != 'admin' 
+        ORDER BY created_at DESC 
+        LIMIT 5
+    ");
+    $recentUsers = $stmt->fetchAll();
+
+    // Активные пользователи
+    $stmt = db()->query("
+        SELECT 
+            u.id, u.username, u.email, u.role, u.last_login,
+            COUNT(DISTINCT c.id) as campaigns_count,
+            COUNT(ap.id) as placements_count,
+            COALESCE(SUM(ap.price), 0) as total_spent
+        FROM users u
+        LEFT JOIN campaigns c ON u.id = c.user_id
+        LEFT JOIN ad_placements ap ON c.id = ap.campaign_id
+        WHERE u.role != 'admin' AND u.last_login IS NOT NULL
+        GROUP BY u.id
+        ORDER BY u.last_login DESC
+        LIMIT 5
+    ");
+    $activeUsers = $stmt->fetchAll();
+
+    // График регистраций за 7 дней
+    $stmt = db()->query("
+        SELECT 
+            DATE(created_at) as date, 
+            COUNT(*) as count
+        FROM users 
+        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) 
+        AND role != 'admin'
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    ");
+    $registrationData = $stmt->fetchAll();
+
+    // График доходов за 7 дней
+    $stmt = db()->query("
+        SELECT 
+            DATE(created_at) as date, 
+            COALESCE(SUM(price), 0) as revenue
+        FROM ad_placements
+        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    ");
+    $revenueData = $stmt->fetchAll();
+
+    // Подготовка данных для графиков
+    $chartLabels = [];
+    $registrationChartData = [];
+    $revenueChartData = [];
+    $chartDates = [];
+    
+    // Заполняем все дни за последние 7 дней
+    for ($i = 6; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-$i days"));
+        $chartDates[$date] = 0;
+        $chartLabels[] = date('d.m', strtotime($date));
+    }
+    
+    // Данные регистраций
+    $regDates = $chartDates;
+    foreach ($registrationData as $day) {
+        if (isset($regDates[$day['date']])) {
+            $regDates[$day['date']] = (int)$day['count'];
+        }
+    }
+    $registrationChartData = array_values($regDates);
+    
+    // Данные доходов
+    $revDates = $chartDates;
+    foreach ($revenueData as $day) {
+        if (isset($revDates[$day['date']])) {
+            $revDates[$day['date']] = (float)$day['revenue'];
+        }
+    }
+    $revenueChartData = array_values($revDates);
+
+} catch (Exception $e) {
+    error_log("Ошибка в админ-дашборде: " . $e->getMessage());
+    
+    $userStats = [
+        'total_users' => 0, 'premium_users' => 0, 'free_users' => 0,
+        'blocked_users' => 0, 'registered_today' => 0, 'active_today' => 0
+    ];
+    $placementStats = [
+        'total_placements' => 0, 'total_revenue' => 0, 
+        'total_campaigns' => 0, 'placements_today' => 0
+    ];
+    $paymentStats = ['payments_count' => 0, 'payments_amount' => 0];
+    $recentUsers = $activeUsers = [];
+    $chartLabels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    $registrationChartData = $revenueChartData = [0, 0, 0, 0, 0, 0, 0];
+}
+
+$userStats = $userStats ?: [];
+$placementStats = $placementStats ?: [];
+$paymentStats = $paymentStats ?: [];
 ?>
 
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TeleAdm - Профессиональная аналитика рекламы в Telegram</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        min-height: 100vh;
+        color: #334155;
+    }
+
+    .dashboard-container {
+        padding: 32px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    .dashboard-header {
+        margin-bottom: 40px;
+        text-align: center;
+    }
+
+    .dashboard-title {
+        color: #0f172a;
+        font-size: 32px;
+        font-weight: 800;
+        margin-bottom: 8px;
+        letter-spacing: -0.025em;
+    }
+
+    .dashboard-subtitle {
+        color: #64748b;
+        font-size: 16px;
+        font-weight: 500;
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 24px;
+        margin-bottom: 40px;
+    }
+
+    .stat-card {
+        background: white;
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+        border: 1px solid #f1f5f9;
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    .stat-card.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .stat-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .stat-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 20px;
+    }
+
+    .stat-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stat-icon::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--gradient);
+        opacity: 0.9;
+    }
+
+    .stat-icon svg {
+        position: relative;
+        z-index: 1;
+    }
+
+    .stat-icon.users {
+        --gradient: linear-gradient(135deg, #3b82f6, #1e40af);
+    }
+    
+    .stat-icon.premium {
+        --gradient: linear-gradient(135deg, #f59e0b, #d97706);
+    }
+    
+    .stat-icon.placements {
+        --gradient: linear-gradient(135deg, #10b981, #047857);
+    }
+    
+    .stat-icon.revenue {
+        --gradient: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    }
+
+    .stat-content {
+        flex: 1;
+        margin-right: 20px;
+    }
+
+    .stat-value {
+        font-size: 36px;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1;
+        margin-bottom: 8px;
+        letter-spacing: -0.025em;
+    }
+
+    .stat-label {
+        font-size: 15px;
+        color: #64748b;
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+
+    .stat-change {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 6px 12px;
+        border-radius: 20px;
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+    }
+
+    .content-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 32px;
+        margin-bottom: 40px;
+    }
+
+    .chart-card {
+        background: white;
+        border-radius: 20px;
+        padding: 32px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+        border: 1px solid #f1f5f9;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .chart-card.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .chart-header {
+        margin-bottom: 28px;
+    }
+
+    .chart-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 6px;
+        letter-spacing: -0.025em;
+    }
+
+    .chart-subtitle {
+        font-size: 14px;
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    .chart-container {
+        height: 360px;
+        position: relative;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #fafafa;
+    }
+
+    .quick-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 20px;
+        margin-bottom: 40px;
+    }
+
+    .quick-action {
+        background: white;
+        border-radius: 16px;
+        padding: 24px;
+        text-decoration: none;
+        color: #0f172a;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+        border: 1px solid #f1f5f9;
+        text-align: center;
+        opacity: 0;
+        transform: translateY(20px);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .quick-action.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .quick-action::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(135deg, #3b82f6, #1e40af);
+    }
+
+    .quick-action:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
+        text-decoration: none;
+        color: #0f172a;
+    }
+
+    .quick-action-icon {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 16px;
+        background: linear-gradient(135deg, #3b82f6, #1e40af);
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .quick-action-icon::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: inherit;
+        opacity: 0.9;
+    }
+
+    .quick-action-icon svg {
+        position: relative;
+        z-index: 1;
+    }
+
+    .quick-action-title {
+        font-weight: 700;
+        font-size: 16px;
+        margin-bottom: 8px;
+        color: #0f172a;
+        letter-spacing: -0.025em;
+    }
+
+    .quick-action-desc {
+        font-size: 13px;
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    .data-card {
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+        border: 1px solid #f1f5f9;
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .data-card.animate-in {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    .data-header {
+        padding: 24px 32px;
+        background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .data-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.025em;
+    }
+
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .data-table th {
+        background: #f8fafc;
+        padding: 16px 24px;
+        text-align: left;
+        font-weight: 700;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #475569;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .data-table td {
+        padding: 20px 24px;
+        border-bottom: 1px solid #f1f5f9;
+        font-size: 14px;
+    }
+
+    .data-table tr:hover {
+        background: #f8fafc;
+    }
+
+    .data-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .user-info {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .user-name {
+        font-weight: 600;
+        color: #0f172a;
+        font-size: 15px;
+    }
+
+    .user-email {
+        font-size: 12px;
+        color: #64748b;
+    }
+
+    .user-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .user-badge.premium {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        color: white;
+    }
+
+    .user-badge.user {
+        background: #f1f5f9;
+        color: #64748b;
+    }
+
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.2s ease;
+        border: none;
+        cursor: pointer;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #3b82f6, #1e40af);
+        color: white;
+        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(59, 130, 246, 0.4);
+        text-decoration: none;
+        color: white;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 40px;
+        color: #64748b;
+    }
+
+    .empty-icon {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 20px;
+        opacity: 0.4;
+        color: #94a3b8;
+    }
+
+    .empty-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #475569;
+        margin-bottom: 8px;
+    }
+
+    .empty-desc {
+        font-size: 14px;
+        color: #64748b;
+    }
+
+    /* Анимации */
+    .stat-card:nth-child(1) { transition-delay: 0.1s; }
+    .stat-card:nth-child(2) { transition-delay: 0.2s; }
+    .stat-card:nth-child(3) { transition-delay: 0.3s; }
+    .stat-card:nth-child(4) { transition-delay: 0.4s; }
+
+    .quick-action:nth-child(1) { transition-delay: 0.1s; }
+    .quick-action:nth-child(2) { transition-delay: 0.2s; }
+    .quick-action:nth-child(3) { transition-delay: 0.3s; }
+    .quick-action:nth-child(4) { transition-delay: 0.4s; }
+
+    /* Специфичные стили для иконок */
+    .quick-action:nth-child(1) .quick-action-icon {
+        background: linear-gradient(135deg, #3b82f6, #1e40af);
+    }
+    
+    .quick-action:nth-child(2) .quick-action-icon {
+        background: linear-gradient(135deg, #10b981, #047857);
+    }
+    
+    .quick-action:nth-child(3) .quick-action-icon {
+        background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    }
+    
+    .quick-action:nth-child(4) .quick-action-icon {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+        .content-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .dashboard-container {
+            padding: 20px;
+        }
         
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --primary: #2563eb;
-            --primary-light: #3b82f6;
-            --primary-dark: #1d4ed8;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --error: #ef4444;
-            --text-primary: #0f172a;
-            --text-secondary: #64748b;
-            --text-tertiary: #94a3b8;
-            --bg-primary: #ffffff;
-            --bg-secondary: #f8fafc;
-            --bg-tertiary: #f1f5f9;
-            --border: #e2e8f0;
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-            --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 10px 10px -5px rgb(0 0 0 / 0.04);
-            --radius-md: 8px;
-            --radius-lg: 12px;
-            --radius-xl: 16px;
-        }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            color: var(--text-primary);
-            background: var(--bg-primary);
-            line-height: 1.6;
-            overflow-x: hidden;
-        }
-
-        /* Header */
-        .header {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-bottom: 1px solid var(--border);
-            transition: all 0.3s ease;
-        }
-
-        .header.scrolled {
-            background: rgba(255, 255, 255, 0.98);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .header-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            height: 70px;
-        }
-
-        .logo {
-            font-size: 28px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-decoration: none;
-            letter-spacing: -0.025em;
-        }
-
-        .nav {
-            display: flex;
-            align-items: center;
-            gap: 32px;
-        }
-
-        .nav-links {
-            display: flex;
-            list-style: none;
-            gap: 32px;
-            align-items: center;
-        }
-
-        .nav-link {
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 15px;
-            transition: all 0.2s ease;
-            position: relative;
-        }
-
-        .nav-link:hover {
-            color: var(--primary);
-        }
-
-        .nav-link::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: 0;
-            width: 0;
-            height: 2px;
-            background: var(--primary);
-            transition: width 0.3s ease;
-        }
-
-        .nav-link:hover::after {
-            width: 100%;
-        }
-
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 12px 24px;
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            text-decoration: none;
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            white-space: nowrap;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            color: white;
-            box-shadow: var(--shadow-md);
-        }
-
-        .btn-primary:hover {
-            background: linear-gradient(135deg, var(--primary-dark), var(--primary));
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .btn-secondary {
-            background: var(--bg-primary);
-            color: var(--primary);
-            border: 2px solid var(--border);
-        }
-
-        .btn-secondary:hover {
-            border-color: var(--primary);
-            background: var(--bg-secondary);
-        }
-
-        /* Hero Section */
-        .hero {
-            position: relative;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            overflow: hidden;
-        }
-
-        .hero::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: 
-                radial-gradient(circle at 20% 50%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.08) 0%, transparent 50%),
-                radial-gradient(circle at 40% 80%, rgba(255, 255, 255, 0.06) 0%, transparent 50%);
-        }
-
-        .hero-bg-elements {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            overflow: hidden;
-        }
-
-        .floating-element {
-            position: absolute;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 50%;
-            animation: float 6s ease-in-out infinite;
-        }
-
-        .floating-element:nth-child(1) {
-            width: 80px;
-            height: 80px;
-            top: 20%;
-            left: 10%;
-            animation-delay: 0s;
-        }
-
-        .floating-element:nth-child(2) {
-            width: 120px;
-            height: 120px;
-            top: 60%;
-            right: 15%;
-            animation-delay: 2s;
-        }
-
-        .floating-element:nth-child(3) {
-            width: 60px;
-            height: 60px;
-            bottom: 20%;
-            left: 20%;
-            animation-delay: 4s;
-        }
-
-        @keyframes float {
-            0%, 100% { transform: translateY(0px) rotate(0deg); }
-            50% { transform: translateY(-20px) rotate(180deg); }
-        }
-
-        .hero-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-            position: relative;
-            z-index: 2;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 80px;
-            align-items: center;
-        }
-
-        .hero-content {
-            color: white;
-        }
-
-        .hero-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(10px);
-            padding: 8px 16px;
-            border-radius: 50px;
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 24px;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .hero-title {
-            font-size: 56px;
-            font-weight: 800;
-            line-height: 1.1;
-            margin-bottom: 24px;
-            letter-spacing: -0.025em;
-        }
-
-        .hero-subtitle {
-            font-size: 20px;
-            opacity: 0.9;
-            margin-bottom: 40px;
-            line-height: 1.6;
-        }
-
-        .hero-buttons {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 40px;
-        }
-
-        .btn-large {
-            padding: 16px 32px;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .hero-stats {
-            display: flex;
-            gap: 32px;
-        }
-
-        .hero-stat {
-            text-align: center;
-        }
-
-        .hero-stat-number {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 4px;
-        }
-
-        .hero-stat-label {
-            font-size: 14px;
-            opacity: 0.8;
-        }
-
-        .hero-visual {
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .hero-dashboard {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: var(--radius-xl);
-            padding: 24px;
-            box-shadow: var(--shadow-xl);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            transform: perspective(1000px) rotateY(-5deg) rotateX(5deg);
-            transition: transform 0.3s ease;
-        }
-
-        .hero-dashboard:hover {
-            transform: perspective(1000px) rotateY(0deg) rotateX(0deg);
-        }
-
-        .dashboard-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .dashboard-avatar {
-            width: 40px;
-            height: 40px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-        }
-
-        .dashboard-info h4 {
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 2px;
-        }
-
-        .dashboard-info p {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-
-        .dashboard-metrics {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-
-        .metric-card {
-            background: var(--bg-secondary);
-            padding: 16px;
-            border-radius: var(--radius-md);
-            text-align: center;
-        }
-
-        .metric-value {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 4px;
-        }
-
-        .metric-label {
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        .dashboard-chart {
-            height: 80px;
-            background: var(--bg-secondary);
-            border-radius: var(--radius-md);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .chart-line {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 60%;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            clip-path: polygon(0 100%, 0 60%, 20% 40%, 40% 50%, 60% 20%, 80% 30%, 100% 10%, 100% 100%);
-            opacity: 0.8;
-        }
-
-        /* Problems Section */
-        .problems {
-            padding: 120px 0;
-            background: var(--bg-primary);
-            position: relative;
-        }
-
-        .problems::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, var(--border), transparent);
-        }
-
-        .problems-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-            text-align: center;
-        }
-
-        .problems-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: linear-gradient(135deg, #fee2e2, #fecaca);
-            color: var(--error);
-            padding: 8px 16px;
-            border-radius: 50px;
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 24px;
-        }
-
-        .problems-title {
-            font-size: 48px;
-            font-weight: 800;
-            margin-bottom: 24px;
-            line-height: 1.2;
-        }
-
-        .problems-subtitle {
-            font-size: 20px;
-            color: var(--text-secondary);
-            margin-bottom: 60px;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        .problems-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 40px;
-            margin-bottom: 60px;
-        }
-
-        .problem-card {
-            background: var(--bg-secondary);
-            padding: 32px 24px;
-            border-radius: var(--radius-xl);
-            text-align: center;
-            transition: all 0.3s ease;
-            border: 1px solid var(--border);
-        }
-
-        .problem-card:hover {
-            transform: translateY(-8px);
-            box-shadow: var(--shadow-xl);
-        }
-
-        .problem-icon {
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 24px;
-            background: linear-gradient(135deg, #fee2e2, #fecaca);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-        }
-
-        .problem-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-primary);
-        }
-
-        .problem-description {
-            color: var(--text-secondary);
-            line-height: 1.6;
-        }
-
-        .problem-stat {
-            font-size: 36px;
-            font-weight: 800;
-            color: var(--error);
-            margin-bottom: 8px;
-        }
-
-        /* Solution Section */
-        .solution {
-            padding: 120px 0;
-            background: linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary));
-            position: relative;
-        }
-
-        .solution-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-        }
-
-        .solution-content {
-            text-align: center;
-            margin-bottom: 80px;
-        }
-
-        .solution-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: linear-gradient(135deg, #d1fae5, #a7f3d0);
-            color: var(--success);
-            padding: 8px 16px;
-            border-radius: 50px;
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 24px;
-        }
-
-        .solution-title {
-            font-size: 48px;
-            font-weight: 800;
-            margin-bottom: 24px;
-            line-height: 1.2;
-        }
-
-        .solution-subtitle {
-            font-size: 20px;
-            color: var(--text-secondary);
-            margin-bottom: 40px;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 32px;
-        }
-
-        .feature-card {
-            background: var(--bg-primary);
-            padding: 32px 24px;
-            border-radius: var(--radius-xl);
-            text-align: center;
-            transition: all 0.3s ease;
-            border: 1px solid var(--border);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .feature-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            transform: scaleX(0);
-            transition: transform 0.3s ease;
-        }
-
-        .feature-card:hover::before {
-            transform: scaleX(1);
-        }
-
-        .feature-card:hover {
-            transform: translateY(-8px);
-            box-shadow: var(--shadow-xl);
-        }
-
-        .feature-icon {
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 24px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-            color: white;
-        }
-
-        .feature-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            color: var(--text-primary);
-        }
-
-        .feature-description {
-            color: var(--text-secondary);
-            line-height: 1.6;
-        }
-
-        /* Social Proof */
-        .social-proof {
-            padding: 120px 0;
-            background: var(--bg-primary);
-        }
-
-        .social-proof-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-            text-align: center;
-        }
-
-        .social-proof-title {
-            font-size: 36px;
-            font-weight: 700;
-            margin-bottom: 60px;
-            color: var(--text-primary);
-        }
-
         .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 40px;
-            margin-bottom: 80px;
+            grid-template-columns: 1fr;
         }
-
-        .stat-card {
-            text-align: center;
+        
+        .dashboard-title {
+            font-size: 26px;
         }
-
-        .stat-number {
-            font-size: 48px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            margin-bottom: 8px;
+        
+        .stat-value {
+            font-size: 30px;
         }
-
-        .stat-label {
-            color: var(--text-secondary);
-            font-weight: 500;
+        
+        .quick-actions {
+            grid-template-columns: repeat(2, 1fr);
         }
+    }
 
-        /* CTA Section */
-        .cta {
-            padding: 120px 0;
-            background: linear-gradient(135deg, var(--primary), var(--primary-light));
-            color: white;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
+    @media (max-width: 480px) {
+        .quick-actions {
+            grid-template-columns: 1fr;
         }
+    }
+</style>
 
-        .cta::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: 
-                radial-gradient(circle at 20% 50%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.08) 0%, transparent 50%);
-        }
-
-        .cta-container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 0 24px;
-            position: relative;
-            z-index: 2;
-        }
-
-        .cta-title {
-            font-size: 48px;
-            font-weight: 800;
-            margin-bottom: 24px;
-            line-height: 1.2;
-        }
-
-        .cta-subtitle {
-            font-size: 20px;
-            opacity: 0.9;
-            margin-bottom: 40px;
-            line-height: 1.6;
-        }
-
-        .cta-buttons {
-            display: flex;
-            gap: 16px;
-            justify-content: center;
-            margin-bottom: 40px;
-        }
-
-        .btn-white {
-            background: white;
-            color: var(--primary);
-        }
-
-        .btn-white:hover {
-            background: var(--bg-secondary);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .cta-guarantee {
-            font-size: 14px;
-            opacity: 0.8;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-        }
-
-        /* Footer */
-        .footer {
-            background: var(--text-primary);
-            color: white;
-            padding: 60px 0 30px;
-        }
-
-        .footer-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 24px;
-        }
-
-        .footer-content {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr;
-            gap: 60px;
-            margin-bottom: 40px;
-        }
-
-        .footer-brand h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 16px;
-        }
-
-        .footer-brand p {
-            opacity: 0.8;
-            line-height: 1.6;
-        }
-
-        .footer-links h4 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 16px;
-        }
-
-        .footer-links ul {
-            list-style: none;
-        }
-
-        .footer-links li {
-            margin-bottom: 8px;
-        }
-
-        .footer-links a {
-            color: white;
-            text-decoration: none;
-            opacity: 0.8;
-            transition: opacity 0.2s;
-        }
-
-        .footer-links a:hover {
-            opacity: 1;
-        }
-
-        .footer-bottom {
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 30px;
-            text-align: center;
-            opacity: 0.6;
-        }
-
-        /* Mobile Menu */
-        .mobile-menu-toggle {
-            display: none;
-            background: none;
-            border: none;
-            font-size: 24px;
-            color: var(--text-primary);
-            cursor: pointer;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .mobile-menu-toggle {
-                display: block;
-            }
-
-            .nav-links {
-                display: none;
-            }
-
-            .hero-container {
-                grid-template-columns: 1fr;
-                gap: 40px;
-                text-align: center;
-            }
-
-            .hero-title {
-                font-size: 36px;
-            }
-
-            .hero-buttons {
-                flex-direction: column;
-                align-items: center;
-            }
-
-            .hero-stats {
-                justify-content: center;
-            }
-
-            .problems-grid,
-            .features-grid {
-                grid-template-columns: 1fr;
-                gap: 24px;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 24px;
-            }
-
-            .footer-content {
-                grid-template-columns: 1fr;
-                gap: 40px;
-            }
-
-            .problems-title,
-            .solution-title,
-            .cta-title {
-                font-size: 32px;
-            }
-        }
-
-        /* Animations */
-        .fade-in {
-            opacity: 0;
-            transform: translateY(30px);
-            transition: all 0.6s ease;
-        }
-
-        .fade-in.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .scale-in {
-            opacity: 0;
-            transform: scale(0.8);
-            transition: all 0.6s ease;
-        }
-
-        .scale-in.visible {
-            opacity: 1;
-            transform: scale(1);
-        }
-    </style>
-</head>
-<body>
+<div class="dashboard-container">
     <!-- Header -->
-    <header class="header" id="header">
-        <div class="header-container">
-            <a href="/" class="logo">TeleAdm</a>
-            <nav class="nav">
-                <ul class="nav-links">
-                    <li><a href="#features" class="nav-link">Возможности</a></li>
-                    <li><a href="/pricing.php" class="nav-link">Тарифы</a></li>
-                    <?php if (isLoggedIn()): ?>
-                        <?php if (isAdmin()): ?>
-                            <li><a href="/admin/" class="nav-link">Админ-панель</a></li>
-                        <?php else: ?>
-                            <li><a href="/dashboard/" class="nav-link">Личный кабинет</a></li>
-                        <?php endif; ?>
-                        <li><a href="/logout.php" class="btn btn-primary">Выйти</a></li>
-                    <?php else: ?>
-                        <li><a href="/login.php" class="nav-link">Войти</a></li>
-                        <li><a href="/register.php" class="btn btn-primary">Начать бесплатно</a></li>
-                    <?php endif; ?>
-                </ul>
-                <button class="mobile-menu-toggle">☰</button>
-            </nav>
-        </div>
-    </header>
+    <div class="dashboard-header">
+        <h1 class="dashboard-title">Панель администратора TeleADM</h1>
+        <p class="dashboard-subtitle">Управление платформой рекламы в Telegram каналах</p>
+    </div>
 
-    <!-- Hero Section -->
-    <section class="hero">
-        <div class="hero-bg-elements">
-            <div class="floating-element"></div>
-            <div class="floating-element"></div>
-            <div class="floating-element"></div>
-        </div>
-        <div class="hero-container">
-            <div class="hero-content">
-                <div class="hero-badge">
-                    <span>🚀</span>
-                    Революция в аналитике рекламы
-                </div>
-                <h1 class="hero-title">Превратите рекламу в Telegram в прибыльный бизнес</h1>
-                <p class="hero-subtitle">Профессиональная аналитика, которая поможет вам экономить до 60% рекламного бюджета и увеличить ROI в 3 раза</p>
-                <div class="hero-buttons">
-                    <a href="/register.php" class="btn btn-white btn-large">Попробовать бесплатно</a>
-                    <a href="#features" class="btn btn-secondary btn-large">Узнать больше</a>
-                </div>
-                <div class="hero-stats">
-                    <div class="hero-stat">
-                        <div class="hero-stat-number">2,847</div>
-                        <div class="hero-stat-label">Довольных клиентов</div>
-                    </div>
-                    <div class="hero-stat">
-                        <div class="hero-stat-number">₽12.5М</div>
-                        <div class="hero-stat-label">Сэкономлено</div>
-                    </div>
-                    <div class="hero-stat">
-                        <div class="hero-stat-number">3.2x</div>
-                        <div class="hero-stat-label">Рост ROI</div>
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-header">
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($userStats['total_users'] ?? 0); ?></div>
+                    <div class="stat-label">Всего пользователей</div>
+                    <div class="stat-change">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        +<?php echo $userStats['registered_today'] ?? 0; ?> сегодня
                     </div>
                 </div>
-            </div>
-            <div class="hero-visual">
-                <div class="hero-dashboard">
-                    <div class="dashboard-header">
-                        <div class="dashboard-avatar">А</div>
-                        <div class="dashboard-info">
-                            <h4>Алексей Петров</h4>
-                            <p>Админ канала @crypto_news</p>
-                        </div>
-                    </div>
-                    <div class="dashboard-metrics">
-                        <div class="metric-card">
-                            <div class="metric-value">₽45,230</div>
-                            <div class="metric-label">Потрачено</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">1,247</div>
-                            <div class="metric-label">Подписчиков</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">₽36.2</div>
-                            <div class="metric-label">Цена подписчика</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">₽127</div>
-                            <div class="metric-label">CPM</div>
-                        </div>
-                    </div>
-                    <div class="dashboard-chart">
-                        <div class="chart-line"></div>
-                    </div>
+                <div class="stat-icon users">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                        <path d="M17 21V19C17 17.9391 16.5786 16.9217 15.8284 16.1716C15.0783 15.4214 14.0609 15 13 15H5C3.93913 15 2.92172 15.4214 2.17157 16.1716C1.42143 16.9217 1 17.9391 1 19V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="9" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+                        <path d="M23 21V19C22.9993 18.1137 22.7044 17.2528 22.1614 16.5523C21.6184 15.8519 20.8581 15.3516 20 15.13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M16 3.13C16.8604 3.35031 17.623 3.85071 18.1676 4.55232C18.7122 5.25392 19.0078 6.11683 19.0078 7.005C19.0078 7.89318 18.7122 8.75608 18.1676 9.45769C17.623 10.1593 16.8604 10.6597 16 10.88" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
                 </div>
             </div>
         </div>
-    </section>
 
-    <!-- Problems Section -->
-    <section class="problems">
-        <div class="problems-container">
-            <div class="problems-badge">
-                <span>⚠️</span>
-                Проблема
+        <div class="stat-card">
+            <div class="stat-header">
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($userStats['premium_users'] ?? 0); ?></div>
+                    <div class="stat-label">Premium подписки</div>
+                    <div class="stat-change">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        <?php 
+                        $total = $userStats['total_users'] ?? 0;
+                        $premium = $userStats['premium_users'] ?? 0;
+                        echo $total > 0 ? round(($premium / $total) * 100, 1) : 0; 
+                        ?>% конверсия
+                    </div>
+                </div>
+                <div class="stat-icon premium">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
             </div>
-            <h2 class="problems-title fade-in">87% рекламодателей в Telegram теряют деньги</h2>
-            <p class="problems-subtitle fade-in">Большинство админов не знают реальную эффективность своей рекламы и переплачивают в разы</p>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-header">
+                <div class="stat-content">
+                    <div class="stat-value"><?php echo number_format($placementStats['total_placements'] ?? 0); ?></div>
+                    <div class="stat-label">Размещений всего</div>
+                    <div class="stat-change">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        +<?php echo $placementStats['placements_today'] ?? 0; ?> сегодня
+                    </div>
+                </div>
+                <div class="stat-icon placements">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" stroke="currentColor" stroke-width="2"/>
+                        <line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="2"/>
+                        <line x1="12" y1="17" x2="12" y2="21" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-header">
+                <div class="stat-content">
+                    <div class="stat-value">₽<?php echo number_format($placementStats['total_revenue'] ?? 0, 0, ',', ' '); ?></div>
+                    <div class="stat-label">Общая выручка</div>
+                    <div class="stat-change">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        ₽<?php echo number_format($paymentStats['payments_amount'] ?? 0, 0, ',', ' '); ?> в месяц
+                    </div>
+                </div>
+                <div class="stat-icon revenue">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 1V23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="quick-actions">
+        <a href="users.php" class="quick-action">
+            <div class="quick-action-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <path d="M16 21V19C16 17.9391 15.5786 16.9217 14.8284 16.1716C14.0783 15.4214 13.0609 15 12 15H5C3.93913 15 2.92172 15.4214 2.17157 16.1716C1.42143 16.9217 1 17.9391 1 19V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="8.5" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+                    <path d="M20 8V14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M23 11H17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="quick-action-title">Управление пользователями</div>
+            <div class="quick-action-desc">Просмотр, редактирование и модерация пользователей</div>
+        </a>
+        
+        <a href="payments.php" class="quick-action">
+            <div class="quick-action-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" stroke="currentColor" stroke-width="2"/>
+                    <line x1="1" y1="10" x2="23" y2="10" stroke="currentColor" stroke-width="2"/>
+                    <path d="M7 15.5H9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <div class="quick-action-title">Платежи и подписки</div>
+            <div class="quick-action-desc">История транзакций и управление биллингом</div>
+        </a>
+        
+        <a href="settings.php" class="quick-action">
+            <div class="quick-action-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    <path d="M12 1V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M12 21V23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M4.22 4.22L5.64 5.64" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M18.36 18.36L19.78 19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M1 12H3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M21 12H23" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M4.22 19.78L5.64 18.36" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M18.36 5.64L19.78 4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="quick-action-title">Настройки системы</div>
+            <div class="quick-action-desc">Конфигурация параметров и лимитов</div>
+        </a>
+        
+        <a href="monitor.php" class="quick-action">
+            <div class="quick-action-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <path d="M3 3V21H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M9 9L12 6L16 10L20 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="9" cy="9" r="1" fill="currentColor"/>
+                    <circle cx="12" cy="6" r="1" fill="currentColor"/>
+                    <circle cx="16" cy="10" r="1" fill="currentColor"/>
+                    <circle cx="20" cy="6" r="1" fill="currentColor"/>
+                </svg>
+            </div>
+            <div class="quick-action-title">Мониторинг активности</div>
+            <div class="quick-action-desc">Логи системы и статистика в реальном времени</div>
+        </a>
+    </div>
+
+    <!-- Content Grid -->
+    <div class="content-grid">
+        <!-- Charts -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <h3 class="chart-title">Аналитика за неделю</h3>
+                <p class="chart-subtitle">Регистрации новых пользователей и доходы от размещений</p>
+            </div>
+            <div class="chart-container">
+                <canvas id="mainChart" style="width: 100%; height: 100%;"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Users -->
+        <div class="data-card">
+            <div class="data-header">
+                <h3 class="data-title">Последние регистрации</h3>
+            </div>
+            <?php if (empty($recentUsers)): ?>
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
+                            <path d="M20 21V19C20 17.9391 19.5786 16.9217 18.8284 16.1716C18.0783 15.4214 17.0609 15 16 15H8C6.93913 15 5.92172 15.4214 5.17157 16.1716C4.42143 16.9217 4 17.9391 4 19V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <circle cx="12" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <div class="empty-title">Пока нет новых пользователей</div>
+                    <div class="empty-desc">Новые регистрации появятся здесь</div>
+                </div>
+            <?php else: ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Пользователь</th>
+                            <th>Тип</th>
+                            <th>Дата</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($recentUsers as $user): ?>
+                        <tr>
+                            <td>
+                                <div class="user-info">
+                                    <div class="user-name"><?php echo htmlspecialchars($user['username']); ?></div>
+                                    <div class="user-email"><?php echo htmlspecialchars($user['email']); ?></div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="user-badge <?php echo $user['role']; ?>">
+                                    <?php echo $user['role'] === 'premium' ? 'Premium' : 'Базовый'; ?>
+                                </span>
+                            </td>
+                            <td style="font-size: 12px; color: #64748b;">
+                                <?php echo date('d.m.Y H:i', strtotime($user['created_at'])); ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Active Users -->
+    <div class="data-card">
+        <div class="data-header">
+            <h3 class="data-title">Активные пользователи</h3>
+        </div>
+        <?php if (empty($activeUsers)): ?>
+            <div class="empty-state">
+                <div class="empty-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                        <path d="M8 14S9.5 16 12 16S16 14 16 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <line x1="9" y1="9" x2="9.01" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <line x1="15" y1="9" x2="15.01" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <div class="empty-title">Пока нет активных пользователей</div>
+                <div class="empty-desc">Активность пользователей появится здесь</div>
+            </div>
+        <?php else: ?>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Пользователь</th>
+                        <th>Кампаний</th>
+                        <th>Размещений</th>
+                        <th>Потрачено</th>
+                        <th>Последний вход</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($activeUsers as $user): ?>
+                    <tr>
+                        <td>
+                            <div class="user-info">
+                                <div class="user-name"><?php echo htmlspecialchars($user['username']); ?></div>
+                                <div class="user-email"><?php echo htmlspecialchars($user['email']); ?></div>
+                            </div>
+                        </td>
+                        <td>
+                            <span style="font-weight: 700; color: #3b82f6; font-size: 16px;">
+                                <?php echo $user['campaigns_count']; ?>
+                            </span>
+                        </td>
+                        <td>
+                            <span style="font-weight: 700; color: #10b981; font-size: 16px;">
+                                <?php echo $user['placements_count']; ?>
+                            </span>
+                        </td>
+                        <td>
+                            <span style="font-weight: 700; color: #8b5cf6; font-size: 16px;">
+                                ₽<?php echo number_format($user['total_spent'], 0, ',', ' '); ?>
+                            </span>
+                        </td>
+                        <td style="font-size: 12px; color: #64748b;">
+                            <?php echo $user['last_login'] ? date('d.m.Y H:i', strtotime($user['last_login'])) : 'Никогда'; ?>
+                        </td>
+                        <td>
+                            <a href="users.php?id=<?php echo $user['id']; ?>" class="btn btn-primary">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                                    <path d="M1 12S5 4 12 4S23 12 23 12S19 20 12 20S1 12 1 12Z" stroke="currentColor" stroke-width="2"/>
+                                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                                Просмотр
+                            </a>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<script>
+    // Данные для графиков
+    const chartLabels = <?php echo json_encode($chartLabels); ?>;
+    const registrationData = <?php echo json_encode($registrationChartData); ?>;
+    const revenueData = <?php echo json_encode($revenueChartData); ?>;
+
+    // Анимации при загрузке
+    document.addEventListener('DOMContentLoaded', function() {
+        // Анимация карточек
+        const statCards = document.querySelectorAll('.stat-card');
+        const quickActions = document.querySelectorAll('.quick-action');
+        const dataCards = document.querySelectorAll('.data-card');
+        const chartCards = document.querySelectorAll('.chart-card');
+
+        function animateElements(elements, baseDelay = 0) {
+            elements.forEach((element, index) => {
+                setTimeout(() => {
+                    element.classList.add('animate-in');
+                }, baseDelay + (index * 100));
+            });
+        }
+
+        // Запуск анимаций
+        setTimeout(() => animateElements(statCards), 100);
+        setTimeout(() => animateElements(quickActions), 400);
+        setTimeout(() => animateElements(chartCards), 600);
+        setTimeout(() => animateElements(dataCards), 700);
+
+        // Инициализация графика
+        setTimeout(initChart, 800);
+    });
+
+    // Современный мягкий график
+    function initChart() {
+        const canvas = document.getElementById('mainChart');
+        if (!canvas) return;
+        
+        const ctx = canvas.getContext('2d');
+        const rect = canvas.parentElement.getBoundingClientRect();
+        
+        // Устанавливаем размеры с учетом DPI
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+
+        const padding = 60;
+        const chartWidth = rect.width - padding * 2;
+        const chartHeight = rect.height - padding * 2;
+        
+        const maxReg = Math.max(...registrationData, 1);
+        const maxRev = Math.max(...revenueData, 1);
+        const stepX = chartWidth / (chartLabels.length - 1);
+        
+        // Очистка
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        
+        // Мягкая сетка
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)';
+        ctx.lineWidth = 1;
+        
+        for (let i = 0; i <= 4; i++) {
+            const y = padding + (chartHeight / 4) * i;
+            ctx.beginPath();
+            ctx.moveTo(padding, y);
+            ctx.lineTo(padding + chartWidth, y);
+            ctx.stroke();
+        }
+
+        // График доходов (мягкая область)
+        if (revenueData.some(v => v > 0)) {
+            const gradient = ctx.createLinearGradient(0, padding, 0, padding + chartHeight);
+            gradient.addColorStop(0, 'rgba(139, 92, 246, 0.2)');
+            gradient.addColorStop(1, 'rgba(139, 92, 246, 0.02)');
             
-            <div class="problems-grid">
-                <div class="problem-card fade-in">
-                    <div class="problem-icon">😵</div>
-                    <div class="problem-stat">₽156</div>
-                    <h3 class="problem-title">Переплата за подписчика</h3>
-                    <p class="problem-description">Средняя переплата из-за отсутствия аналитики и контроля эффективности</p>
-                </div>
-                <div class="problem-card fade-in">
-                    <div class="problem-icon">📉</div>
-                    <div class="problem-stat">43%</div>
-                    <h3 class="problem-title">Каналов в минусе</h3>
-                    <p class="problem-description">Почти половина каналов работает убыточно из-за неэффективной рекламы</p>
-                </div>
-                <div class="problem-card fade-in">
-                    <div class="problem-icon">💸</div>
-                    <div class="problem-stat">₽2.3М</div>
-                    <h3 class="problem-title">Потери в месяц</h3>
-                    <p class="problem-description">Общие потери рынка из-за неэффективного размещения рекламы</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Solution Section -->
-    <section class="solution" id="features">
-        <div class="solution-container">
-            <div class="solution-content">
-                <div class="solution-badge">
-                    <span>✅</span>
-                    Решение
-                </div>
-                <h2 class="solution-title fade-in">TeleAdm решает все проблемы рекламы в Telegram</h2>
-                <p class="solution-subtitle fade-in">Профессиональная аналитическая платформа для максимизации ROI ваших рекламных кампаний</p>
-            </div>
+            ctx.beginPath();
+            ctx.moveTo(padding, padding + chartHeight);
             
-            <div class="features-grid">
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">📊</div>
-                    <h3 class="feature-title">Детальная аналитика</h3>
-                    <p class="feature-description">Отслеживайте CPM, стоимость подписчика, конверсии и ROI в реальном времени с точностью до копейки</p>
-                </div>
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">💰</div>
-                    <h3 class="feature-title">Контроль бюджета</h3>
-                    <p class="feature-description">Управляйте расходами по кампаниям, устанавливайте лимиты и получайте уведомления о превышении</p>
-                </div>
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">🎯</div>
-                    <h3 class="feature-title">Поиск лучших каналов</h3>
-                    <p class="feature-description">Сравнивайте эффективность площадок и находите самые выгодные каналы для размещения</p>
-                </div>
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">📈</div>
-                    <h3 class="feature-title">Прогнозирование</h3>
-                    <p class="feature-description">ИИ-алгоритмы предсказывают эффективность размещений и рекомендуют оптимальные стратегии</p>
-                </div>
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">📋</div>
-                    <h3 class="feature-title">Автоматические отчеты</h3>
-                    <p class="feature-description">Получайте красивые отчеты в Excel и PDF с графиками, таблицами и рекомендациями</p>
-                </div>
-                <div class="feature-card scale-in">
-                    <div class="feature-icon">🔒</div>
-                    <h3 class="feature-title">Безопасность данных</h3>
-                    <p class="feature-description">Ваши данные защищены банковским шифрованием и доступны только вам</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Social Proof -->
-    <section class="social-proof">
-        <div class="social-proof-container">
-            <h2 class="social-proof-title fade-in">Результаты говорят сами за себя</h2>
-            <div class="stats-grid">
-                <div class="stat-card fade-in">
-                    <div class="stat-number">2,847</div>
-                    <div class="stat-label">Активных пользователей</div>
-                </div>
-                <div class="stat-card fade-in">
-                    <div class="stat-number">₽12.5М</div>
-                    <div class="stat-label">Сэкономлено клиентам</div>
-                </div>
-                <div class="stat-card fade-in">
-                    <div class="stat-number">3.2x</div>
-                    <div class="stat-label">Средний рост ROI</div>
-                </div>
-                <div class="stat-card fade-in">
-                    <div class="stat-number">98%</div>
-                    <div class="stat-label">Довольных клиентов</div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- CTA Section -->
-    <section class="cta">
-        <div class="cta-container">
-            <h2 class="cta-title fade-in">Начните экономить на рекламе уже сегодня</h2>
-            <p class="cta-subtitle fade-in">Присоединяйтесь к 2,847 успешным рекламодателям, которые уже экономят с TeleAdm</p>
-            <div class="cta-buttons">
-                <a href="/register.php" class="btn btn-white btn-large">Начать бесплатно</a>
-                <a href="/pricing.php" class="btn btn-secondary btn-large">Посмотреть тарифы</a>
-            </div>
-            <div class="cta-guarantee">
-                <span>🛡️</span>
-                14 дней бесплатно • Отмена в любой момент • Без обязательств
-            </div>
-        </div>
-    </section>
-
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="footer-container">
-            <div class="footer-content">
-                <div class="footer-brand">
-                    <h3>TeleAdm</h3>
-                    <p>Профессиональная аналитика рекламы в Telegram. Увеличивайте ROI и экономьте бюджет с помощью данных.</p>
-                </div>
-                <div class="footer-links">
-                    <h4>Продукт</h4>
-                    <ul>
-                        <li><a href="#features">Возможности</a></li>
-                        <li><a href="/pricing.php">Тарифы</a></li>
-                        <li><a href="/demo.php">Демо</a></li>
-                    </ul>
-                </div>
-                <div class="footer-links">
-                    <h4>Поддержка</h4>
-                    <ul>
-                        <li><a href="/help.php">Помощь</a></li>
-                        <li><a href="/contact.php">Контакты</a></li>
-                        <li><a href="/api.php">API</a></li>
-                    </ul>
-                </div>
-                <div class="footer-links">
-                    <h4>Компания</h4>
-                    <ul>
-                        <li><a href="/about.php">О нас</a></li>
-                        <li><a href="/privacy.php">Конфиденциальность</a></li>
-                        <li><a href="/terms.php">Условия</a></li>
-                    </ul>
-                </div>
-            </div>
-            <div class="footer-bottom">
-                <p>&copy; 2025 TeleAdm. Все права защищены.</p>
-            </div>
-        </div>
-    </footer>
-
-    <script>
-        // Header scroll effect
-        window.addEventListener('scroll', () => {
-            const header = document.getElementById('header');
-            if (window.scrollY > 50) {
-                header.classList.add('scrolled');
-            } else {
-                header.classList.remove('scrolled');
-            }
-        });
-
-        // Smooth scrolling
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                const target = document.querySelector(this.getAttribute('href'));
-                if (target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
+            revenueData.forEach((value, index) => {
+                const x = padding + index * stepX;
+                const y = padding + chartHeight - (value / maxRev) * chartHeight;
+                
+                if (index === 0) {
+                    ctx.lineTo(x, y);
+                } else {
+                    // Мягкие кривые
+                    const prevX = padding + (index - 1) * stepX;
+                    const prevY = padding + chartHeight - (revenueData[index - 1] / maxRev) * chartHeight;
+                    const cpX = (prevX + x) / 2;
+                    ctx.quadraticCurveTo(cpX, prevY, x, y);
                 }
             });
-        });
-
-        // Intersection Observer for animations
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('visible');
+            
+            ctx.lineTo(padding + chartWidth, padding + chartHeight);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Мягкая линия доходов
+            ctx.strokeStyle = '#8b5cf6';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            
+            revenueData.forEach((value, index) => {
+                const x = padding + index * stepX;
+                const y = padding + chartHeight - (value / maxRev) * chartHeight;
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    const prevX = padding + (index - 1) * stepX;
+                    const prevY = padding + chartHeight - (revenueData[index - 1] / maxRev) * chartHeight;
+                    const cpX = (prevX + x) / 2;
+                    ctx.quadraticCurveTo(cpX, prevY, x, y);
                 }
             });
-        }, observerOptions);
+            
+            ctx.stroke();
+        }
 
-        // Observe all animation elements
-        document.querySelectorAll('.fade-in, .scale-in').forEach(el => {
-            observer.observe(el);
+        // График регистраций (мягкая линия)
+        if (registrationData.some(v => v > 0)) {
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            
+            registrationData.forEach((value, index) => {
+                const x = padding + index * stepX;
+                const y = padding + chartHeight - (value / maxReg) * chartHeight;
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    const prevX = padding + (index - 1) * stepX;
+                    const prevY = padding + chartHeight - (registrationData[index - 1] / maxReg) * chartHeight;
+                    const cpX = (prevX + x) / 2;
+                    ctx.quadraticCurveTo(cpX, prevY, x, y);
+                }
+            });
+            
+            ctx.stroke();
+            
+            // Мягкие точки
+            ctx.fillStyle = '#3b82f6';
+            registrationData.forEach((value, index) => {
+                const x = padding + index * stepX;
+                const y = padding + chartHeight - (value / maxReg) * chartHeight;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, 5, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Белый центр
+                ctx.beginPath();
+                ctx.arc(x, y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+                ctx.fillStyle = '#3b82f6';
+            });
+        }
+        
+        // Мягкие подписи
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 12px Inter, system-ui';
+        ctx.textAlign = 'center';
+        
+        // Подписи дней
+        chartLabels.forEach((label, index) => {
+            const x = padding + index * stepX;
+            ctx.fillText(label, x, padding + chartHeight + 25);
         });
+        
+        // Подписи значений регистраций (левая ось)
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#3b82f6';
+        for (let i = 0; i <= 4; i++) {
+            const value = Math.round((maxReg / 4) * (4 - i));
+            const y = padding + (chartHeight / 4) * i + 4;
+            ctx.fillText(value.toString(), padding - 15, y);
+        }
+        
+        // Подписи значений доходов (правая ось)
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#8b5cf6';
+        for (let i = 0; i <= 4; i++) {
+            const value = Math.round((maxRev / 4) * (4 - i));
+            const y = padding + (chartHeight / 4) * i + 4;
+            ctx.fillText('₽' + value.toLocaleString(), padding + chartWidth + 15, y);
+        }
 
-        // Mobile menu toggle
-        const mobileToggle = document.querySelector('.mobile-menu-toggle');
-        const navLinks = document.querySelector('.nav-links');
+        // Элегантная легенда
+        ctx.font = '600 14px Inter, system-ui';
+        ctx.textAlign = 'left';
+        
+        // Регистрации
+        ctx.fillStyle = '#3b82f6';
+        ctx.beginPath();
+        ctx.arc(padding + 10, 25, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText('Новые пользователи', padding + 25, 30);
+        
+        // Доходы
+        ctx.fillStyle = '#8b5cf6';
+        ctx.beginPath();
+        ctx.arc(padding + 180, 25, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText('Доходы (₽)', padding + 195, 30);
+    }
 
-        mobileToggle?.addEventListener('click', () => {
-            navLinks.style.display = navLinks.style.display === 'flex' ? 'none' : 'flex';
-        });
-    </script>
-</body>
-</html>
+    // Обновление графика при изменении размера
+    window.addEventListener('resize', function() {
+        setTimeout(initChart, 100);
+    });
+</script>
+
+<?php require_once 'footer.php'; ?>
